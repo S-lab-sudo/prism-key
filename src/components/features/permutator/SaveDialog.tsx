@@ -130,35 +130,35 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
            </div>
 
            {/* Bottom Row: Options (Collapsible) */}
-           <div className={cn("grid grid-cols-1 md:grid-cols-5 gap-6 items-end transition-all duration-300 overflow-hidden", showOptions ? "opacity-100 max-h-[100px]" : "opacity-0 max-h-0")}>
+           <div className={cn("flex flex-wrap items-center justify-between gap-4 transition-all duration-300 overflow-hidden", showOptions ? "opacity-100 max-h-[100px] py-2" : "opacity-0 max-h-0 py-0")}>
                 
                 {/* Length */}
-                <div className="space-y-3">
+                <div className="flex flex-col items-center gap-2 min-w-[80px]">
                     <Label className="text-muted-foreground text-xs uppercase tracking-wider">Length</Label>
                     <Input 
                         type="number" 
                         value={genLength} 
                         onChange={(e) => setGenLength(Math.max(4, Math.min(128, parseInt(e.target.value) || 20)))}
-                        className="bg-muted/20 border-border/50 text-center font-mono"
+                        className="bg-muted/20 border-border/50 text-center font-mono w-20 h-9"
                     />
                 </div>
 
                 {/* Toggles */}
-                 <div className="space-y-3 flex flex-col items-center">
+                <div className="flex flex-col items-center gap-2">
                     <Label className="text-muted-foreground text-xs uppercase tracking-wider">Uppercase</Label>
                     <Switch checked={genOptions.upper} onCheckedChange={(c) => setGenOptions({...genOptions, upper: c})} />
                 </div>
-                <div className="space-y-3 flex flex-col items-center">
+                <div className="flex flex-col items-center gap-2">
                     <Label className="text-muted-foreground text-xs uppercase tracking-wider">Lowercase</Label>
-                     <Switch checked={genOptions.lower} onCheckedChange={(c) => setGenOptions({...genOptions, lower: c})} />
+                    <Switch checked={genOptions.lower} onCheckedChange={(c) => setGenOptions({...genOptions, lower: c})} />
                 </div>
-                <div className="space-y-3 flex flex-col items-center">
+                <div className="flex flex-col items-center gap-2">
                     <Label className="text-muted-foreground text-xs uppercase tracking-wider">Numbers</Label>
-                     <Switch checked={genOptions.nums} onCheckedChange={(c) => setGenOptions({...genOptions, nums: c})} />
+                    <Switch checked={genOptions.nums} onCheckedChange={(c) => setGenOptions({...genOptions, nums: c})} />
                 </div>
-                <div className="space-y-3 flex flex-col items-center">
+                <div className="flex flex-col items-center gap-2">
                     <Label className="text-muted-foreground text-xs uppercase tracking-wider">Symbols</Label>
-                     <Switch checked={genOptions.syms} onCheckedChange={(c) => setGenOptions({...genOptions, syms: c})} />
+                    <Switch checked={genOptions.syms} onCheckedChange={(c) => setGenOptions({...genOptions, syms: c})} />
                 </div>
 
            </div>

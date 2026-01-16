@@ -201,7 +201,7 @@ export default function VaultFeature() {
                 <div className="space-y-3 border-t pt-4">
                    <Label>Save to Vault</Label>
                    <Input placeholder="Label (e.g. Netflix)" value={saveLabel} onChange={(e) => setSaveLabel(e.target.value)} />
-                   <Input placeholder="Username (Optional)" value={saveUsername} onChange={(e) => setSaveUsername(e.target.value)} />
+                   <Input placeholder="Email (Optional)" value={saveUsername} onChange={(e) => setSaveUsername(e.target.value)} />
                    <Button className="w-full" onClick={handleSave} disabled={!saveLabel}>
                       <Save className="mr-2 w-4 h-4" /> Save Entry
                    </Button>

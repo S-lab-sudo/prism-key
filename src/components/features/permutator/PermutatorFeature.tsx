@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -109,12 +109,22 @@ export default function PermutatorFeature() {
     }
   }, [email, setPermutatorState]);
 
+  // Use ref to track timeout for cleanup
+  const copyTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
   const handleCopy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(text);
       toast.success("Copied to clipboard!");
-      setTimeout(() => setCopied(null), 2000);
+      
+      // Clear any existing timeout
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+      
+      // Set new timeout
+      copyTimeoutRef.current = setTimeout(() => setCopied(null), 2000);
     } catch (err) {
       console.error('Clipboard write failed:', err);
       toast.error("Failed to copy. Please try again.");
@@ -208,7 +218,7 @@ export default function PermutatorFeature() {
             </div>
           )}
         </CardHeader>
-        <CardContent className="flex-grow overflow-y-auto p-2 space-y-1">
+        <CardContent className="flex-grow overflow-y-auto p-2 space-y-2">
           {results.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
               <Search className="w-12 h-12 mb-4 opacity-50" />
@@ -221,17 +231,21 @@ export default function PermutatorFeature() {
                 <div
                   key={variant}
                   className={cn(
-                    "flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors group",
+                    "flex items-center justify-between p-2.5 rounded-md hover:bg-accent transition-colors group",
                     isSaved && "bg-green-500/10"
                   )}
                 >
-                  <span className="font-mono text-sm truncate">{variant}</span>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isSaved && <Check className="w-4 h-4 text-green-500 shrink-0" />}
+                    <span className="font-mono text-sm truncate">{variant}</span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
                       onClick={() => handleCopy(variant)}
+                      aria-label="Copy email variant"
                     >
                       {copied === variant ? (
                         <Check className="w-4 h-4 text-green-500" />
@@ -245,6 +259,7 @@ export default function PermutatorFeature() {
                       className="h-7 w-7"
                       onClick={() => openSaveDialog(variant)}
                       disabled={isSaved}
+                      aria-label={isSaved ? "Already saved" : "Save to vault"}
                     >
                       <Save className={cn("w-4 h-4", isSaved && "text-green-500")} />
                     </Button>
