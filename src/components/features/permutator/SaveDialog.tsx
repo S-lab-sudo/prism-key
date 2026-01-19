@@ -8,14 +8,14 @@ import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
-  DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
-import { RefreshCw, Save, Copy, SlidersHorizontal, RotateCcw } from 'lucide-react';
+import { Save, Copy, SlidersHorizontal, RotateCcw, Lock, Unlock, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { generatePassword } from '@/lib/password';
+import { useVaultStore } from '@/lib/store';
 
 interface SaveDialogProps {
   open: boolean;
@@ -25,6 +25,9 @@ interface SaveDialogProps {
 }
 
 export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: SaveDialogProps) {
+  const { isUnlocked, unlockVault } = useVaultStore();
+  
+  // Form State
   const [label, setLabel] = useState('');
   const [username, setUsername] = useState(initialUsername);
   const [password, setPassword] = useState('');
@@ -33,6 +36,11 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
   const [showOptions, setShowOptions] = useState(true);
   const [genLength, setGenLength] = useState(20);
   const [genOptions, setGenOptions] = useState({ upper: true, lower: true, nums: true, syms: true });
+  
+  // Unlock State
+  const [masterPassword, setMasterPassword] = useState('');
+  const [isUnlocking, setIsUnlocking] = useState(false);
+  const [unlockError, setUnlockError] = useState('');
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -43,6 +51,8 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
       setGenLength(20);
       setGenOptions({ upper: true, lower: true, nums: true, syms: true });
       setShowOptions(true);
+      setMasterPassword('');
+      setUnlockError('');
       
       // Auto-generate a password on open
       const newPass = generatePassword(20, { upper: true, lower: true, nums: true, syms: true });
@@ -57,119 +67,201 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
 
   const handleSave = () => {
     onSave({ label, username, value: password });
-    onOpenChange(false);
+    // Note: onOpenChange(false) is handled by the parent after successful save
   };
 
   const handleCopy = () => {
     navigator.clipboard.writeText(username);
     toast.success("Username copied to clipboard");
   };
+  
+  const handleUnlock = async () => {
+    if (!masterPassword.trim()) {
+      setUnlockError('Please enter your master password.');
+      return;
+    }
+    
+    setIsUnlocking(true);
+    setUnlockError('');
+    
+    try {
+      const success = await unlockVault(masterPassword);
+      if (success) {
+        toast.success("Vault unlocked!");
+        setMasterPassword(''); // Clear for security
+      } else {
+        setUnlockError('Failed to unlock vault. Please try again.');
+      }
+    } catch (err) {
+      setUnlockError('An unexpected error occurred.');
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[800px] p-0 gap-0 overflow-hidden border-border/50">
         
-        {/* Header Bar */}
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-muted/10">
-            <div className="flex items-center gap-3">
-                <div className="bg-primary/10 p-2 rounded-md">
-                    <Save className="w-5 h-5 text-primary" />
-                </div>
-                <DialogTitle className="font-mono text-lg">{username}</DialogTitle>
+        {/* Conditional Rendering: Unlock Gate or Save Form */}
+        {!isUnlocked ? (
+          /* ========== UNLOCK VAULT VIEW ========== */
+          <div className="p-8 space-y-6">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="bg-amber-500/10 p-4 rounded-full">
+                <Lock className="w-10 h-10 text-amber-500" />
+              </div>
+              <DialogTitle className="text-2xl font-semibold">Vault Locked</DialogTitle>
+              <DialogDescription className="text-muted-foreground max-w-sm">
+                Enter your master password to unlock the vault. Your password never leaves this browser.
+              </DialogDescription>
             </div>
-            <Button variant="ghost" size="icon" onClick={handleCopy} aria-label="Copy username to clipboard">
-                <Copy className="w-5 h-5 text-muted-foreground" />
-            </Button>
-        </div>
-
-        <div className="p-6 space-y-8">
-           {/* Top Row: Label & Password Display */}
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                {/* Left: Label */}
-                <div className="space-y-3">
-                    <Label htmlFor="label" className="text-muted-foreground">Label <span className="text-red-500">*</span></Label>
-                    <Input 
-                        id="label" 
-                        placeholder="e.g. Netflix Primary" 
-                        value={label} 
-                        onChange={(e) => setLabel(e.target.value)}
-                        className="h-12 bg-muted/20 border-border/50 text-base"
-                    />
+            
+            <div className="space-y-4 max-w-sm mx-auto">
+              <div className="space-y-2">
+                <Label htmlFor="master-password">Master Password</Label>
+                <Input
+                  id="master-password"
+                  type="password"
+                  placeholder="••••••••••••"
+                  value={masterPassword}
+                  onChange={(e) => setMasterPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+                  className="h-12 text-base"
+                  autoFocus
+                />
+                {unlockError && (
+                  <p className="text-sm text-destructive">{unlockError}</p>
+                )}
+              </div>
+              
+              <Button 
+                onClick={handleUnlock} 
+                disabled={isUnlocking} 
+                className="w-full h-12 text-base gap-2"
+              >
+                {isUnlocking ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Unlock className="w-5 h-5" />
+                )}
+                Unlock Vault
+              </Button>
+              
+              <p className="text-xs text-muted-foreground text-center">
+                First time? Use any password you like—it will be your encryption key.
+              </p>
+            </div>
+          </div>
+        ) : (
+          /* ========== SAVE FORM VIEW ========== */
+          <>
+            {/* Header Bar */}
+            <div className="flex items-center justify-between px-6 py-4 border-b bg-muted/10">
+                <div className="flex items-center gap-3">
+                    <div className="bg-primary/10 p-2 rounded-md">
+                        <Save className="w-5 h-5 text-primary" />
+                    </div>
+                    <DialogTitle className="font-mono text-lg">{username}</DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Save this generated email variation to your secure local vault.
+                    </DialogDescription>
                 </div>
+                <Button variant="ghost" size="icon" onClick={handleCopy} aria-label="Copy username to clipboard">
+                    <Copy className="w-5 h-5 text-muted-foreground" />
+                </Button>
+            </div>
 
-                {/* Right: Password Field */}
-                <div className="space-y-3 relative">
-                     <div className="flex items-center justify-between">
-                        <Label htmlFor="password" className="text-muted-foreground">Secure Password <span className="text-red-500">*</span></Label>
-                        <button 
-                            onClick={() => setShowOptions(!showOptions)} 
-                            className="text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
-                            aria-label={showOptions ? "Hide password options" : "Show password options"}
-                        >
-                            <SlidersHorizontal className="w-3 h-3" /> {showOptions ? "Hide Options" : "Show Options"}
-                        </button>
-                     </div>
-                     <div className="relative">
+            <div className="p-6 space-y-8">
+               {/* Top Row: Label & Password Display */}
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Left: Label */}
+                    <div className="space-y-3">
+                        <Label htmlFor="label" className="text-muted-foreground">Label <span className="text-red-500">*</span></Label>
                         <Input 
-                            id="password" 
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="h-12 bg-muted/20 border-border/50 font-mono text-base pr-12"
+                            id="label" 
+                            placeholder="e.g. Netflix Primary" 
+                            value={label} 
+                            onChange={(e) => setLabel(e.target.value)}
+                            className="h-12 bg-muted/20 border-border/50 text-base"
                         />
-                         <Button 
-                            size="icon" 
-                            variant="ghost" 
-                            className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                            onClick={handleRegenerate}
-                            aria-label="Regenerate password"
-                        >
-                            <RotateCcw className="w-4 h-4" />
-                        </Button>
-                     </div>
-                </div>
-           </div>
+                    </div>
 
-           {/* Bottom Row: Options (Collapsible) */}
-           <div className={cn("flex flex-wrap items-center justify-between gap-4 transition-all duration-300 overflow-hidden", showOptions ? "opacity-100 max-h-[100px] py-2" : "opacity-0 max-h-0 py-0")}>
-                
-                {/* Length */}
-                <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Length</Label>
-                    <Input 
-                        type="number" 
-                        value={genLength} 
-                        onChange={(e) => setGenLength(Math.max(4, Math.min(128, parseInt(e.target.value) || 20)))}
-                        className="bg-muted/20 border-border/50 text-center font-mono w-20 h-9"
-                    />
-                </div>
+                    {/* Right: Password Field */}
+                    <div className="space-y-3 relative">
+                         <div className="flex items-center justify-between">
+                            <Label htmlFor="password" className="text-muted-foreground">Secure Password <span className="text-red-500">*</span></Label>
+                            <button 
+                                onClick={() => setShowOptions(!showOptions)} 
+                                className="text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+                                aria-label={showOptions ? "Hide password options" : "Show password options"}
+                            >
+                                <SlidersHorizontal className="w-3 h-3" /> {showOptions ? "Hide Options" : "Show Options"}
+                            </button>
+                         </div>
+                         <div className="relative">
+                            <Input 
+                                id="password" 
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="h-12 bg-muted/20 border-border/50 font-mono text-base pr-12"
+                            />
+                             <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                onClick={handleRegenerate}
+                                aria-label="Regenerate password"
+                            >
+                                <RotateCcw className="w-4 h-4" />
+                            </Button>
+                         </div>
+                    </div>
+               </div>
 
-                {/* Toggles */}
-                <div className="flex flex-col items-center gap-2">
-                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Uppercase</Label>
-                    <Switch checked={genOptions.upper} onCheckedChange={(c) => setGenOptions({...genOptions, upper: c})} />
-                </div>
-                <div className="flex flex-col items-center gap-2">
-                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Lowercase</Label>
-                    <Switch checked={genOptions.lower} onCheckedChange={(c) => setGenOptions({...genOptions, lower: c})} />
-                </div>
-                <div className="flex flex-col items-center gap-2">
-                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Numbers</Label>
-                    <Switch checked={genOptions.nums} onCheckedChange={(c) => setGenOptions({...genOptions, nums: c})} />
-                </div>
-                <div className="flex flex-col items-center gap-2">
-                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Symbols</Label>
-                    <Switch checked={genOptions.syms} onCheckedChange={(c) => setGenOptions({...genOptions, syms: c})} />
-                </div>
+               {/* Bottom Row: Options (Collapsible) */}
+               <div className={cn("flex flex-wrap items-center justify-between gap-4 transition-all duration-300 overflow-hidden", showOptions ? "opacity-100 max-h-[100px] py-2" : "opacity-0 max-h-0 py-0")}>
+                    
+                    {/* Length */}
+                    <div className="flex flex-col items-center gap-2 min-w-[80px]">
+                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Length</Label>
+                        <Input 
+                            type="number" 
+                            value={genLength} 
+                            onChange={(e) => setGenLength(Math.max(4, Math.min(128, parseInt(e.target.value) || 20)))}
+                            className="bg-muted/20 border-border/50 text-center font-mono w-20 h-9"
+                        />
+                    </div>
 
-           </div>
+                    {/* Toggles */}
+                    <div className="flex flex-col items-center gap-2">
+                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Uppercase</Label>
+                        <Switch checked={genOptions.upper} onCheckedChange={(c) => setGenOptions({...genOptions, upper: c})} />
+                    </div>
+                    <div className="flex flex-col items-center gap-2">
+                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Lowercase</Label>
+                        <Switch checked={genOptions.lower} onCheckedChange={(c) => setGenOptions({...genOptions, lower: c})} />
+                    </div>
+                    <div className="flex flex-col items-center gap-2">
+                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Numbers</Label>
+                        <Switch checked={genOptions.nums} onCheckedChange={(c) => setGenOptions({...genOptions, nums: c})} />
+                    </div>
+                    <div className="flex flex-col items-center gap-2">
+                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Symbols</Label>
+                        <Switch checked={genOptions.syms} onCheckedChange={(c) => setGenOptions({...genOptions, syms: c})} />
+                    </div>
 
-        </div>
+               </div>
 
-        {/* Footer actions */}
-        <div className="p-6 flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!label || !password}>Confirm Save</Button>
-        </div>
+            </div>
+
+            {/* Footer actions */}
+            <div className="p-6 flex justify-end gap-3 pt-2">
+                <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+                <Button onClick={handleSave} disabled={!label || !password}>Confirm Save</Button>
+            </div>
+          </>
+        )}
 
       </DialogContent>
     </Dialog>

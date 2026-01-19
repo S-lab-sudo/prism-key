@@ -275,15 +275,20 @@ export default function PermutatorFeature() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         initialUsername={selectedVariant}
-        onSave={(data) => {
-            addItem({
+        onSave={async (data) => {
+            const success = await addItem({
                 label: data.label,
                 username: data.username,
                 value: data.value,
                 strength: data.value ? 'Strong' : undefined,
             });
-            toast.success("Saved to vault!");
-            setDialogOpen(false);
+            
+            if (success) {
+                toast.success("Saved to vault!");
+                setDialogOpen(false);
+            } else {
+                toast.error("Failed to save. Is your vault unlocked?");
+            }
         }}
       />
     </div>

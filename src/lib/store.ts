@@ -1,17 +1,17 @@
 /**
  * PrismKey Vault Store
- * 
+ *
  * Implements:
  * - AES-GCM client-side encryption for password values
  * - Offline-first sync with Supabase
  * - Pending deletes queue to prevent zombie items
  */
 
-import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import { VaultItem } from '@/types';
-import { createClient } from '@/lib/supabase/client';
-import { encrypt, decrypt, isEncrypted } from '@/lib/crypto';
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import { VaultItem } from "@/types";
+import { createClient } from "@/lib/supabase/client";
+import { encrypt, decrypt, isEncrypted } from "@/lib/crypto";
 
 // In-memory only: NEVER persisted
 let masterPassword: string | null = null;
@@ -32,21 +32,21 @@ interface VaultState {
   items: VaultItem[];
   pendingDeletes: string[];
   isUnlocked: boolean;
-  addItem: (item: Omit<VaultItem, 'id' | 'createdAt'>) => Promise<void>;
+  addItem: (item: Omit<VaultItem, 'id' | 'createdAt'>) => Promise<boolean>;
   removeItem: (id: string) => Promise<void>;
   setItems: (items: VaultItem[]) => void;
   syncWithSupabase: () => Promise<void>;
   unlockVault: (password: string) => Promise<boolean>;
   lockVault: () => void;
-  
+
   permutatorState: {
     email: string;
-    results: string[]; 
+    results: string[];
     page: number;
     totalPages: number;
     total: number;
   };
-  setPermutatorState: (state: Partial<VaultState['permutatorState']>) => void;
+  setPermutatorState: (state: Partial<VaultState["permutatorState"]>) => void;
 }
 
 const supabase = createClient();
@@ -57,60 +57,69 @@ export const useVaultStore = create<VaultState>()(
       items: [],
       pendingDeletes: [],
       isUnlocked: false,
-      
+
       addItem: async (item) => {
         if (!masterPassword) {
-          console.error('Cannot add item: Vault is locked.');
-          return;
+          console.error("Cannot add item: Vault is locked.");
+          return false;
         }
-        
+
         const id = crypto.randomUUID();
         // Encrypt the password value before storing
         const encryptedValue = await encrypt(item.value, masterPassword);
-        
-        const newItem = { 
-          ...item, 
+
+        const newItem = {
+          ...item,
           id,
           value: encryptedValue, // Store encrypted
-          createdAt: Date.now() 
+          createdAt: Date.now(),
         };
 
         set((state) => ({ items: [newItem, ...state.items] }));
 
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
         if (session?.user) {
-          const { error } = await supabase.from('vault_items').insert({
+          const { error } = await supabase.from("vault_items").insert({
             id: newItem.id,
             user_id: session.user.id,
             label: newItem.label,
             username: newItem.username,
             value: newItem.value, // Already encrypted
             strength: newItem.strength,
-            created_at: new Date(newItem.createdAt).toISOString()
+            created_at: new Date(newItem.createdAt).toISOString(),
           });
           if (error) {
-            console.error('Failed to sync item:', error);
+            console.error("Failed to sync item:", error);
+            // We still return true because it's saved locally
           }
         }
+        return true;
       },
-      
+
       removeItem: async (id) => {
         set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
 
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
         if (session?.user) {
-          const { error } = await supabase.from('vault_items').delete().eq('id', id);
+          const { error } = await supabase
+            .from("vault_items")
+            .delete()
+            .eq("id", id);
           if (error) {
-            console.error('Failed to delete item, queuing for later:', error);
+            console.error("Failed to delete item, queuing for later:", error);
             set((state) => ({ pendingDeletes: [...state.pendingDeletes, id] }));
           }
         } else {
           set((state) => ({ pendingDeletes: [...state.pendingDeletes, id] }));
         }
       },
-      
+
       setItems: (items) => set({ items }),
-      
+
       unlockVault: async (password: string) => {
         setMasterPassword(password);
         set({ isUnlocked: true });
@@ -118,21 +127,23 @@ export const useVaultStore = create<VaultState>()(
         await get().syncWithSupabase();
         return true;
       },
-      
+
       lockVault: () => {
         clearMasterPassword();
         set({ isUnlocked: false, items: [] });
       },
-      
+
       syncWithSupabase: async () => {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
         if (!session?.user) return;
 
         // Step 1: Process pending deletions
         const pendingDeletes = get().pendingDeletes;
         if (pendingDeletes.length > 0) {
           for (const id of pendingDeletes) {
-            await supabase.from('vault_items').delete().eq('id', id);
+            await supabase.from("vault_items").delete().eq("id", id);
           }
           set({ pendingDeletes: [] });
         }
@@ -140,7 +151,7 @@ export const useVaultStore = create<VaultState>()(
         // Step 2: Upsert local items
         const localItems = get().items;
         if (localItems.length > 0) {
-          const toUpsert = localItems.map(item => ({
+          const toUpsert = localItems.map((item) => ({
             id: item.id,
             user_id: session.user.id,
             label: item.label,
@@ -150,48 +161,49 @@ export const useVaultStore = create<VaultState>()(
             created_at: new Date(item.createdAt).toISOString(),
             updated_at: new Date().toISOString(),
           }));
-          
+
           const { error: upsertError } = await supabase
-            .from('vault_items')
-            .upsert(toUpsert, { onConflict: 'id', ignoreDuplicates: false });
-          
+            .from("vault_items")
+            .upsert(toUpsert, { onConflict: "id", ignoreDuplicates: false });
+
           if (upsertError) {
-            console.error('Failed to upsert local items:', upsertError);
+            console.error("Failed to upsert local items:", upsertError);
           }
         }
 
         // Step 3: Fetch from server (values are encrypted in DB)
         const { data, error } = await supabase
-          .from('vault_items')
-          .select('*')
-          .order('created_at', { ascending: false });
+          .from("vault_items")
+          .select("*")
+          .order("created_at", { ascending: false });
 
         if (data && !error) {
           const mapped: VaultItem[] = data.map((d: any) => ({
-            id: d.id, 
+            id: d.id,
             label: d.label,
             username: d.username,
             value: d.value, // Still encrypted
             strength: d.strength,
-            createdAt: new Date(d.created_at).getTime()
+            createdAt: new Date(d.created_at).getTime(),
           }));
           set({ items: mapped });
         }
       },
 
       permutatorState: {
-        email: '',
+        email: "",
         results: [],
         page: 0,
         totalPages: 0,
-        total: 0
+        total: 0,
       },
-      setPermutatorState: (newState) => set((state) => ({
-        permutatorState: { ...state.permutatorState, ...newState }
-      })),
+      setPermutatorState: (newState) =>
+        set((state) => ({
+          permutatorState: { ...state.permutatorState, ...newState },
+        })),
     }),
     {
-      name: 'prism-key-vault',
+      name: "prism-key-vault",
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         // Only persist non-sensitive metadata, items are encrypted
@@ -199,17 +211,19 @@ export const useVaultStore = create<VaultState>()(
         pendingDeletes: state.pendingDeletes,
         permutatorState: state.permutatorState,
       }),
-    }
-  )
+    },
+  ),
 );
 
 /**
  * Helper to decrypt a vault item's value for display.
  * Call this only when needed (e.g., copy to clipboard, show password).
  */
-export async function decryptVaultValue(encryptedValue: string): Promise<string> {
+export async function decryptVaultValue(
+  encryptedValue: string,
+): Promise<string> {
   if (!masterPassword) {
-    throw new Error('Vault is locked. Cannot decrypt.');
+    throw new Error("Vault is locked. Cannot decrypt.");
   }
   if (!isEncrypted(encryptedValue)) {
     // Legacy plaintext value, return as-is
