@@ -33,8 +33,9 @@ interface VaultState {
   pendingDeletes: string[];
   isUnlocked: boolean;
   addItem: (item: Omit<VaultItem, 'id' | 'createdAt'>) => Promise<boolean>;
+  updateItem: (id: string, updates: Partial<VaultItem>) => Promise<boolean>;
   removeItem: (id: string) => Promise<void>;
-  setItems: (items: VaultItem[]) => void;
+  decryptItemValue: (encryptedValue: string) => Promise<string>;
   syncWithSupabase: () => Promise<void>;
   unlockVault: (password: string) => Promise<boolean>;
   lockVault: () => void;
@@ -98,27 +99,73 @@ export const useVaultStore = create<VaultState>()(
         return true;
       },
 
-      removeItem: async (id) => {
+      removeItem: async (id: string) => {
+        // Optimistically remove locally
         set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
+        
+        // Ensure it's in the pending queue regardless, so sync handles it if the immediate call fails
+        set((state) => ({ pendingDeletes: [...new Set([...state.pendingDeletes, id])] }));
 
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
           const { error } = await supabase
-            .from("vault_items")
+            .from('vault_items')
             .delete()
-            .eq("id", id);
-          if (error) {
-            console.error("Failed to delete item, queuing for later:", error);
-            set((state) => ({ pendingDeletes: [...state.pendingDeletes, id] }));
+            .eq('id', id)
+            .eq('user_id', session.user.id); // Explicitly include user_id for RLS safety
+          
+          if (!error) {
+            // If successful, remove from pending queue
+            set((state) => ({ pendingDeletes: state.pendingDeletes.filter(d => d !== id) }));
+          } else {
+            console.error('Failed to delete item from Supabase:', error);
           }
-        } else {
-          set((state) => ({ pendingDeletes: [...state.pendingDeletes, id] }));
         }
       },
 
-      setItems: (items) => set({ items }),
+      updateItem: async (id: string, updates: Partial<VaultItem>) => {
+        const { items } = get();
+        const item = items.find(i => i.id === id);
+        if (!item || !masterPassword) return false;
+
+        const updatedItem = { ...item, ...updates };
+        
+        // If password value is updated, re-encrypt it
+        if (updates.value && updates.value !== item.value) {
+            updatedItem.value = await encrypt(updates.value, masterPassword);
+        }
+
+        set((state) => ({
+            items: state.items.map(i => i.id === id ? updatedItem : i)
+        }));
+
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+            const { error } = await supabase.from('vault_items').upsert({
+                id: updatedItem.id,
+                user_id: session.user.id,
+                label: updatedItem.label,
+                username: updatedItem.username,
+                value: updatedItem.value,
+                strength: updatedItem.strength,
+                updated_at: new Date().toISOString()
+            });
+            if (error) console.error('Failed to sync update:', error);
+        }
+        return true;
+      },
+      
+      setItems: (items: VaultItem[]) => set({ items }),
+
+      decryptItemValue: async (encryptedValue: string) => {
+        if (!masterPassword) {
+          throw new Error('Vault is locked. Cannot decrypt.');
+        }
+        if (!isEncrypted(encryptedValue)) {
+          return encryptedValue;
+        }
+        return decrypt(encryptedValue, masterPassword);
+      },
 
       unlockVault: async (password: string) => {
         setMasterPassword(password);
@@ -130,7 +177,7 @@ export const useVaultStore = create<VaultState>()(
 
       lockVault: () => {
         clearMasterPassword();
-        set({ isUnlocked: false, items: [] });
+        set({ isUnlocked: false, items: [], pendingDeletes: [] });
       },
 
       syncWithSupabase: async () => {
@@ -143,15 +190,32 @@ export const useVaultStore = create<VaultState>()(
         const pendingDeletes = get().pendingDeletes;
         if (pendingDeletes.length > 0) {
           for (const id of pendingDeletes) {
-            await supabase.from("vault_items").delete().eq("id", id);
+            const { error } = await supabase
+                .from("vault_items")
+                .delete()
+                .eq("id", id)
+                .eq("user_id", session.user.id);
+            
+            if (!error) {
+                // Remove from queue only on success
+                set((state) => ({ 
+                    pendingDeletes: state.pendingDeletes.filter(d => d !== id) 
+                }));
+            } else {
+                console.error(`Sync fail for delete ${id}:`, error);
+            }
           }
-          set({ pendingDeletes: [] });
         }
 
-        // Step 2: Upsert local items
+        // Step 2: Upsert local items (ONLY items not slated for deletion)
         const localItems = get().items;
-        if (localItems.length > 0) {
-          const toUpsert = localItems.map((item) => ({
+        // Re-read pendingDeletes in case Step 1 failed partially (unlikely but safe)
+        const stillPending = get().pendingDeletes;
+        
+        const itemsToPush = localItems.filter(item => !stillPending.includes(item.id));
+
+        if (itemsToPush.length > 0) {
+          const toUpsert = itemsToPush.map((item) => ({
             id: item.id,
             user_id: session.user.id,
             label: item.label,
@@ -178,14 +242,19 @@ export const useVaultStore = create<VaultState>()(
           .order("created_at", { ascending: false });
 
         if (data && !error) {
-          const mapped: VaultItem[] = data.map((d: any) => ({
-            id: d.id,
-            label: d.label,
-            username: d.username,
-            value: d.value, // Still encrypted
-            strength: d.strength,
-            createdAt: new Date(d.created_at).getTime(),
-          }));
+          // Re-re-read pendingDeletes to be absolutely sure we don't restore something we just deleted
+          const finalPending = get().pendingDeletes;
+          
+          const mapped: VaultItem[] = data
+            .filter((d: any) => !finalPending.includes(d.id)) // CRITICAL: Filter out pending deletes from server results
+            .map((d: any) => ({
+              id: d.id,
+              label: d.label,
+              username: d.username,
+              value: d.value, // Still encrypted
+              strength: d.strength,
+              createdAt: new Date(d.created_at).getTime(),
+            }));
           set({ items: mapped });
         }
       },
@@ -204,7 +273,7 @@ export const useVaultStore = create<VaultState>()(
     }),
     {
       name: "prism-key-vault",
-      storage: createJSONStorage(() => sessionStorage),
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         // Only persist non-sensitive metadata, items are encrypted
         items: state.items,

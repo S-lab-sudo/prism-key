@@ -12,6 +12,7 @@ import { createClient } from '@/lib/supabase/client';
 import { User } from '@supabase/supabase-js';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useVaultStore } from '@/lib/store';
+import { VaultUnlockGate } from '@/components/features/vault/VaultUnlockGate';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,7 +60,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const supabase = createClient();
 
-  const { syncWithSupabase } = useVaultStore();
+  const { syncWithSupabase, lockVault } = useVaultStore();
 
   useEffect(() => {
     // Check active session
@@ -77,6 +78,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null);
       if (session?.user) {
           syncWithSupabase();
+      } else {
+          // If no session, ensure vault is locked/cleared
+          lockVault();
       }
     });
 
@@ -94,6 +98,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    lockVault();
     setUser(null);
   };
 
@@ -225,7 +230,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
            key={pathname}
            className="max-w-7xl mx-auto w-full px-4 md:px-8 py-8"
         >
-          {children}
+          {['/vault', '/permutator'].includes(pathname) ? (
+            <VaultUnlockGate>
+              {children}
+            </VaultUnlockGate>
+          ) : (
+            children
+          )}
         </motion.div>
       </main>
 

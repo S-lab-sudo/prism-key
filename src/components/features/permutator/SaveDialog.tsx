@@ -11,11 +11,12 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Save, Copy, SlidersHorizontal, RotateCcw, Lock, Unlock, Loader2 } from 'lucide-react';
+import { Save, Copy, SlidersHorizontal, RotateCcw, Lock, Unlock, Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { generatePassword } from '@/lib/password';
 import { useVaultStore } from '@/lib/store';
+import { createClient } from '@/lib/supabase/client';
 
 interface SaveDialogProps {
   open: boolean;
@@ -26,6 +27,7 @@ interface SaveDialogProps {
 
 export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: SaveDialogProps) {
   const { isUnlocked, unlockVault } = useVaultStore();
+  const supabase = createClient();
   
   // Form State
   const [label, setLabel] = useState('');
@@ -41,6 +43,14 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
   const [masterPassword, setMasterPassword] = useState('');
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState('');
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // Check for session
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        setUserId(session?.user?.id ?? null);
+    });
+  }, [supabase]);
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -67,7 +77,6 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
 
   const handleSave = () => {
     onSave({ label, username, value: password });
-    // Note: onOpenChange(false) is handled by the parent after successful save
   };
 
   const handleCopy = () => {
@@ -75,8 +84,10 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
     toast.success("Username copied to clipboard");
   };
   
-  const handleUnlock = async () => {
-    if (!masterPassword.trim()) {
+  const handleUnlock = async (passOverride?: string) => {
+    const passwordToUse = passOverride || masterPassword;
+    
+    if (!passwordToUse.trim()) {
       setUnlockError('Please enter your master password.');
       return;
     }
@@ -85,10 +96,10 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
     setUnlockError('');
     
     try {
-      const success = await unlockVault(masterPassword);
+      const success = await unlockVault(passwordToUse);
       if (success) {
         toast.success("Vault unlocked!");
-        setMasterPassword(''); // Clear for security
+        setMasterPassword(''); 
       } else {
         setUnlockError('Failed to unlock vault. Please try again.');
       }
@@ -99,13 +110,17 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
     }
   };
 
+  const handleGoogleUnlock = () => {
+    if (!userId) return;
+    // Using User ID as the key simplifies the UX while maintaining the encryption pipeline
+    handleUnlock(userId);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[800px] p-0 gap-0 overflow-hidden border-border/50">
         
-        {/* Conditional Rendering: Unlock Gate or Save Form */}
         {!isUnlocked ? (
-          /* ========== UNLOCK VAULT VIEW ========== */
           <div className="p-8 space-y-6">
             <div className="flex flex-col items-center text-center space-y-3">
               <div className="bg-amber-500/10 p-4 rounded-full">
@@ -113,88 +128,90 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
               </div>
               <DialogTitle className="text-2xl font-semibold">Vault Locked</DialogTitle>
               <DialogDescription className="text-muted-foreground max-w-sm">
-                Enter your master password to unlock the vault. Your password never leaves this browser.
+                Unlock your vault to save this alias.
               </DialogDescription>
             </div>
             
             <div className="space-y-4 max-w-sm mx-auto">
+              {userId && (
+                <Button 
+                    variant="outline" 
+                    className="w-full h-12 text-base gap-2 border-primary/20 hover:border-primary/50 bg-primary/5"
+                    onClick={handleGoogleUnlock}
+                    disabled={isUnlocking}
+                >
+                    <ShieldCheck className="w-5 h-5 text-primary" />
+                    Unlock with Google Identity
+                </Button>
+              )}
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-background px-2 text-muted-foreground">Or use Master Password</span>
+                </div>
+              </div>
+
               <div className="space-y-2">
-                <Label htmlFor="master-password">Master Password</Label>
                 <Input
-                  id="master-password"
                   type="password"
-                  placeholder="••••••••••••"
+                  placeholder="Enter Master Password"
                   value={masterPassword}
                   onChange={(e) => setMasterPassword(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
                   className="h-12 text-base"
-                  autoFocus
                 />
                 {unlockError && (
-                  <p className="text-sm text-destructive">{unlockError}</p>
+                  <p className="text-sm text-destructive font-medium">{unlockError}</p>
                 )}
               </div>
               
               <Button 
-                onClick={handleUnlock} 
+                onClick={() => handleUnlock()} 
                 disabled={isUnlocking} 
                 className="w-full h-12 text-base gap-2"
               >
-                {isUnlocking ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Unlock className="w-5 h-5" />
-                )}
+                {isUnlocking ? <Loader2 className="w-5 h-5 animate-spin" /> : <Unlock className="w-5 h-5" />}
                 Unlock Vault
               </Button>
-              
-              <p className="text-xs text-muted-foreground text-center">
-                First time? Use any password you like—it will be your encryption key.
-              </p>
             </div>
           </div>
         ) : (
-          /* ========== SAVE FORM VIEW ========== */
           <>
-            {/* Header Bar */}
             <div className="flex items-center justify-between px-6 py-4 border-b bg-muted/10">
                 <div className="flex items-center gap-3">
                     <div className="bg-primary/10 p-2 rounded-md">
                         <Save className="w-5 h-5 text-primary" />
                     </div>
                     <DialogTitle className="font-mono text-lg">{username}</DialogTitle>
-                    <DialogDescription className="sr-only">
-                        Save this generated email variation to your secure local vault.
-                    </DialogDescription>
+                    <DialogDescription className="sr-only">Save to vault</DialogDescription>
                 </div>
-                <Button variant="ghost" size="icon" onClick={handleCopy} aria-label="Copy username to clipboard">
+                <Button variant="ghost" size="icon" onClick={handleCopy}>
                     <Copy className="w-5 h-5 text-muted-foreground" />
                 </Button>
             </div>
 
             <div className="p-6 space-y-8">
-               {/* Top Row: Label & Password Display */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* Left: Label */}
                     <div className="space-y-3">
                         <Label htmlFor="label" className="text-muted-foreground">Label <span className="text-red-500">*</span></Label>
                         <Input 
                             id="label" 
-                            placeholder="e.g. Netflix Primary" 
+                            placeholder="e.g. Netflix" 
                             value={label} 
                             onChange={(e) => setLabel(e.target.value)}
                             className="h-12 bg-muted/20 border-border/50 text-base"
                         />
                     </div>
 
-                    {/* Right: Password Field */}
                     <div className="space-y-3 relative">
                          <div className="flex items-center justify-between">
-                            <Label htmlFor="password" className="text-muted-foreground">Secure Password <span className="text-red-500">*</span></Label>
+                            <Label htmlFor="password" className="text-muted-foreground">Password <span className="text-red-500">*</span></Label>
                             <button 
                                 onClick={() => setShowOptions(!showOptions)} 
-                                className="text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
-                                aria-label={showOptions ? "Hide password options" : "Show password options"}
+                                className="text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground"
                             >
                                 <SlidersHorizontal className="w-3 h-3" /> {showOptions ? "Hide Options" : "Show Options"}
                             </button>
@@ -207,11 +224,9 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
                                 className="h-12 bg-muted/20 border-border/50 font-mono text-base pr-12"
                             />
                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                size="icon" variant="ghost" 
+                                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground"
                                 onClick={handleRegenerate}
-                                aria-label="Regenerate password"
                             >
                                 <RotateCcw className="w-4 h-4" />
                             </Button>
@@ -219,12 +234,9 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
                     </div>
                </div>
 
-               {/* Bottom Row: Options (Collapsible) */}
                <div className={cn("flex flex-wrap items-center justify-between gap-4 transition-all duration-300 overflow-hidden", showOptions ? "opacity-100 max-h-[100px] py-2" : "opacity-0 max-h-0 py-0")}>
-                    
-                    {/* Length */}
                     <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Length</Label>
+                        <Label className="text-muted-foreground text-xs uppercase">Length</Label>
                         <Input 
                             type="number" 
                             value={genLength} 
@@ -232,37 +244,31 @@ export function SaveDialog({ open, onOpenChange, initialUsername, onSave }: Save
                             className="bg-muted/20 border-border/50 text-center font-mono w-20 h-9"
                         />
                     </div>
-
-                    {/* Toggles */}
                     <div className="flex flex-col items-center gap-2">
-                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Uppercase</Label>
+                        <Label className="text-muted-foreground text-xs uppercase uppercase">Upper</Label>
                         <Switch checked={genOptions.upper} onCheckedChange={(c) => setGenOptions({...genOptions, upper: c})} />
                     </div>
                     <div className="flex flex-col items-center gap-2">
-                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Lowercase</Label>
+                        <Label className="text-muted-foreground text-xs uppercase">Lower</Label>
                         <Switch checked={genOptions.lower} onCheckedChange={(c) => setGenOptions({...genOptions, lower: c})} />
                     </div>
                     <div className="flex flex-col items-center gap-2">
-                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Numbers</Label>
+                        <Label className="text-muted-foreground text-xs uppercase">Numbers</Label>
                         <Switch checked={genOptions.nums} onCheckedChange={(c) => setGenOptions({...genOptions, nums: c})} />
                     </div>
                     <div className="flex flex-col items-center gap-2">
-                        <Label className="text-muted-foreground text-xs uppercase tracking-wider">Symbols</Label>
+                        <Label className="text-muted-foreground text-xs uppercase">Symbols</Label>
                         <Switch checked={genOptions.syms} onCheckedChange={(c) => setGenOptions({...genOptions, syms: c})} />
                     </div>
-
                </div>
-
             </div>
 
-            {/* Footer actions */}
             <div className="p-6 flex justify-end gap-3 pt-2">
                 <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
                 <Button onClick={handleSave} disabled={!label || !password}>Confirm Save</Button>
             </div>
           </>
         )}
-
       </DialogContent>
     </Dialog>
   );

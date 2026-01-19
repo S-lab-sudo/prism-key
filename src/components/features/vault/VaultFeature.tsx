@@ -8,13 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { Copy, RefreshCw, Eye, EyeOff, Trash2, Check, Search, Save, Edit2, X, Download } from 'lucide-react';
+import { Copy, RefreshCw, Eye, EyeOff, Trash2, Search, Save, Edit2, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { generatePassword } from '@/lib/password';
 
 export default function VaultFeature() {
-  const { items, addItem, removeItem, setItems } = useVaultStore();
+  const { items, addItem, removeItem, updateItem, decryptItemValue } = useVaultStore();
   const [searchTerm, setSearchTerm] = useState('');
   
   // Generator State
@@ -32,39 +32,56 @@ export default function VaultFeature() {
 
   // List State
   const [visibleItems, setVisibleItems] = useState<Set<string>>(new Set());
+  const [decryptedMap, setDecryptedMap] = useState<Record<string, string>>({});
 
   // Init Generator
   useEffect(() => {
      setGeneratedPass(generatePassword(20, { upper: true, lower: true, nums: true, syms: true }));
-  }, []);
+  }, [genLength, genOptions]);
 
   const regenerate = () => {
     setGeneratedPass(generatePassword(genLength, genOptions));
   };
 
-  const handleCopy = async (text: string) => {
+  const getOrDecrypt = async (id: string, encryptedValue: string): Promise<string> => {
+    if (decryptedMap[id]) return decryptedMap[id];
     try {
-      await navigator.clipboard.writeText(text);
-      toast.success("Copied to clipboard!");
+        const decrypted = await decryptItemValue(encryptedValue);
+        setDecryptedMap(prev => ({ ...prev, [id]: decrypted }));
+        return decrypted;
     } catch (err) {
-      console.error('Clipboard write failed:', err);
-      toast.error("Failed to copy. Please try again or copy manually.");
+        toast.error("Failed to decrypt. Is the vault unlocked?");
+        return encryptedValue;
+    }
+  };
+
+  const handleCopy = async (id: string, value: string, isUsername = false) => {
+    try {
+      const textToCopy = isUsername ? value : await getOrDecrypt(id, value);
+      await navigator.clipboard.writeText(textToCopy);
+      toast.success(`${isUsername ? 'Username' : 'Password'} copied!`);
+    } catch (err) {
+      toast.error("Failed to copy.");
     }
   };
 
   const strength = calculateStrength(generatedPass);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!saveLabel || !generatedPass) return;
-    addItem({
+    const success = await addItem({
         label: saveLabel,
         username: saveUsername,
         value: generatedPass,
         strength: strength.level,
     });
-    setSaveLabel('');
-    setSaveUsername('');
-    toast.success("Password saved to vault.");
+    if (success) {
+        setSaveLabel('');
+        setSaveUsername('');
+        toast.success("Password saved to vault.");
+    } else {
+        toast.error("Failed to save. Is your vault unlocked?");
+    }
   };
 
   const handleExport = () => {
@@ -79,13 +96,13 @@ export default function VaultFeature() {
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
-    toast.success("Vault exported successfully.");
+    toast.success("Vault exported (Note: Values remain encrypted)");
   };
 
-  // Edit Handlers
-  const startEdit = (item: any) => {
+  const startEdit = async (item: any) => {
       setEditingId(item.id);
-      setEditForm({ label: item.label, username: item.username || '', value: item.value });
+      const decrypted = await getOrDecrypt(item.id, item.value);
+      setEditForm({ label: item.label, username: item.username || '', value: decrypted });
   };
 
   const cancelEdit = () => {
@@ -93,19 +110,28 @@ export default function VaultFeature() {
       setEditForm({ label: '', username: '', value: '' });
   };
 
-  const saveEdit = (id: string) => {
-      const newItems = items.map(item => 
-          item.id === id ? { ...item, ...editForm, strength: calculateStrength(editForm.value).level } : item
-      );
-      setItems(newItems);
-      setEditingId(null);
-      toast.success("Item updated.");
+  const saveEdit = async (id: string) => {
+      const success = await updateItem(id, {
+          ...editForm,
+          strength: calculateStrength(editForm.value).level
+      });
+      
+      if (success) {
+          setEditingId(null);
+          toast.success("Item updated.");
+      } else {
+          toast.error("Failed to update item.");
+      }
   };
 
-  const toggleVisibility = (id: string) => {
+  const toggleVisibility = async (id: string, encryptedValue: string) => {
     const next = new Set(visibleItems);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (next.has(id)) {
+        next.delete(id);
+    } else {
+        await getOrDecrypt(id, encryptedValue);
+        next.add(id);
+    }
     setVisibleItems(next);
   };
 
@@ -116,39 +142,35 @@ export default function VaultFeature() {
     );
   }, [items, searchTerm]);
 
-  // Hydration Fix
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  if (!mounted) return <div className="p-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>;
+  if (!mounted) return null;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full">
-       {/* Generator Panel */}
        <div className="lg:col-span-5 space-y-6">
-          <Card className="border-border/50 h-fit">
+          <Card className="border-border/50 h-fit bg-card/50 backdrop-blur-sm">
              <CardHeader>
                 <CardTitle>Generator</CardTitle>
              </CardHeader>
              <CardContent className="space-y-6">
-                {/* Display */}
                 <div className="relative group">
                    <div className="p-4 bg-muted/40 rounded-lg border font-mono text-lg break-all pr-20 shadow-inner min-h-[3.5rem] flex items-center">
                       {generatedPass}
                    </div>
                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 bg-muted/80 backdrop-blur p-1 rounded-md">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCopy(generatedPass)} aria-label="Copy password to clipboard">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigator.clipboard.writeText(generatedPass).then(() => toast.success("Copied!"))}>
                          <Copy className="w-4 h-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={regenerate} aria-label="Generate new password">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={regenerate}>
                          <RefreshCw className="w-4 h-4" />
                       </Button>
                    </div>
                 </div>
 
-                {/* Strength Meter */}
                 <div className="space-y-2">
-                   <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                   <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground font-inter">
                       <span>Security Level</span>
                       <span className={strength.color}>{strength.level}</span>
                    </div>
@@ -157,52 +179,31 @@ export default function VaultFeature() {
                    </div>
                 </div>
 
-                {/* Controls */}
                 <div className="space-y-4 pt-2">
                     <div className="flex items-center justify-between gap-4">
                         <Label>Length</Label>
                         <Input 
                             type="number" 
-                            min="4" max="128" 
                             value={genLength} 
-                            onChange={(e) => { 
-                                const val = parseInt(e.target.value) || 4;
-                                setGenLength(Math.min(128, Math.max(4, val))); 
-                            }}
-                            onBlur={regenerate}
+                            onChange={(e) => setGenLength(Math.min(128, Math.max(4, parseInt(e.target.value) || 4)))}
                             className="w-24 font-mono text-center"
                         />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         {Object.entries(genOptions).map(([key, val]) => (
                             <div key={key} className="flex items-center justify-between">
-                                <Label htmlFor={`opt-${key}`} className="capitalize">{key === 'nums' ? 'Numbers' : key === 'syms' ? 'Symbols' : key}</Label>
-                                <Switch 
-                                    id={`opt-${key}`}
-                                    checked={val}
-                                    onCheckedChange={(c) => { 
-                                        setGenOptions(prev => {
-                                            const next = {...prev, [key]: c};
-                                            // Ensure at least one true
-                                            if (!Object.values(next).some(Boolean)) return prev;
-                                            return next;
-                                        }); 
-                                        // Effect will trigger regen via effect or user click. 
-                                        // Since we don't have effect on options change to prevent chaotic typing regen, wait for explicit or blur.
-                                    }}
-                                />
+                                <Label className="capitalize">{key === 'nums' ? 'Numbers' : key === 'syms' ? 'Symbols' : key}</Label>
+                                <Switch checked={val} onCheckedChange={(c) => setGenOptions(prev => ({...prev, [key]: c}))} />
                             </div>
                         ))}
                     </div>
-                     <Button variant="outline" size="sm" className="w-full" onClick={regenerate}>Generate New</Button>
                 </div>
 
-                {/* Quick Save */}
                 <div className="space-y-3 border-t pt-4">
                    <Label>Save to Vault</Label>
                    <Input placeholder="Label (e.g. Netflix)" value={saveLabel} onChange={(e) => setSaveLabel(e.target.value)} />
                    <Input placeholder="Email (Optional)" value={saveUsername} onChange={(e) => setSaveUsername(e.target.value)} />
-                   <Button className="w-full" onClick={handleSave} disabled={!saveLabel}>
+                   <Button className="w-full h-12" onClick={handleSave} disabled={!saveLabel}>
                       <Save className="mr-2 w-4 h-4" /> Save Entry
                    </Button>
                 </div>
@@ -210,26 +211,24 @@ export default function VaultFeature() {
           </Card>
        </div>
 
-       {/* Vault List Panel */}
        <div className="lg:col-span-7 flex flex-col h-[700px] lg:h-auto">
-          {/* Apply py-0 and gap-0 to Card to remove outer padding, matching Permutator */}
-          <Card className="flex-1 flex flex-col border-border/50 overflow-hidden py-0 gap-0">
-             <CardHeader className="flex flex-row items-center justify-between border-b p-2 shrink-0 bg-muted/10 space-y-0">
+          <Card className="flex-1 flex flex-col border-border/50 bg-card/30 backdrop-blur-sm overflow-hidden py-0 gap-0">
+             <CardHeader className="flex flex-row items-center justify-between border-b p-4 shrink-0 bg-muted/10 space-y-0">
                 <div className="flex items-center gap-2">
                     <CardTitle className="text-lg">Your Keys</CardTitle>
-                    <Badge variant="outline">{filteredItems.length}</Badge>
+                    <Badge variant="secondary">{filteredItems.length}</Badge>
                 </div>
                 <div className="flex items-center gap-2">
-                    <div className="relative w-48 lg:w-64">
+                    <div className="relative w-48 md:w-64">
                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                        <Input 
                           placeholder="Search vault..." 
-                          className="pl-8 h-8 bg-background text-sm"
+                          className="pl-8 h-8 bg-background/50"
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
                        />
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExport} aria-label="Export vault to JSON file">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExport}>
                         <Download className="w-4 h-4" />
                     </Button>
                 </div>
@@ -238,68 +237,79 @@ export default function VaultFeature() {
              <CardContent className="flex-1 p-0 overflow-y-auto">
                 {filteredItems.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 gap-4">
-                        <Save className="w-12 h-12 opacity-20" />
-                        <p>No items found.</p>
+                        <Save className="w-12 h-12 opacity-10" />
+                        <p className="text-sm font-inter">No saved credentials found.</p>
                     </div>
                 ) : (
-                    <div className="divide-y divide-border/40">
+                    <div className="divide-y divide-border/20">
                         {filteredItems.map((item) => {
                             const isEditing = editingId === item.id;
-                            
+                            const isVisible = visibleItems.has(item.id);
+                            const renderedValue = isVisible ? (decryptedMap[item.id] || 'Decrypting...') : '••••••••••••••••';
+
                             if (isEditing) {
                                 return (
-                                    <div key={item.id} className="p-4 bg-muted/40 space-y-3">
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">Label</Label>
-                                                <Input value={editForm.label} onChange={e => setEditForm({...editForm, label: e.target.value})} />
+                                    <div key={item.id} className="p-4 bg-primary/5 space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-1.5">
+                                                <Label className="text-xs font-semibold text-muted-foreground uppercase">Label</Label>
+                                                <Input value={editForm.label} onChange={e => setEditForm({...editForm, label: e.target.value})} className="bg-background" />
                                             </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">Username</Label>
-                                                <Input value={editForm.username} onChange={e => setEditForm({...editForm, username: e.target.value})} />
+                                            <div className="space-y-1.5">
+                                                <Label className="text-xs font-semibold text-muted-foreground uppercase">Username</Label>
+                                                <Input value={editForm.username} onChange={e => setEditForm({...editForm, username: e.target.value})} className="bg-background" />
                                             </div>
                                         </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">Password</Label>
+                                        <div className="space-y-1.5">
+                                            <Label className="text-xs font-semibold text-muted-foreground uppercase">Password</Label>
                                             <div className="relative">
-                                                <Input value={editForm.value} onChange={e => setEditForm({...editForm, value: e.target.value})} className="font-mono pr-8" />
-                                                <Button size="icon" variant="ghost" className="absolute right-1 top-1 h-7 w-7" onClick={() => setEditForm({...editForm, value: generatePassword(20, genOptions)})} aria-label="Regenerate password">
-                                                    <RefreshCw className="w-3 h-3" />
+                                                <Input value={editForm.value} onChange={e => setEditForm({...editForm, value: e.target.value})} className="font-mono pr-10 bg-background" />
+                                                <Button size="icon" variant="ghost" className="absolute right-1 top-1 h-8 w-8" onClick={() => setEditForm({...editForm, value: generatePassword(20, genOptions)})}>
+                                                    <RefreshCw className="w-4 h-4" />
                                                 </Button>
                                             </div>
                                         </div>
                                         <div className="flex justify-end gap-2 pt-2">
                                             <Button size="sm" variant="ghost" onClick={cancelEdit}>Cancel</Button>
-                                            <Button size="sm" onClick={() => saveEdit(item.id)}>Save Changes</Button>
+                                            <Button size="sm" onClick={() => saveEdit(item.id)}>Confirm Changes</Button>
                                         </div>
                                     </div>
                                 );
                             }
 
                             return (
-                                <div key={item.id} className="p-4 hover:bg-muted/30 transition-colors group flex items-start justify-between gap-4">
-                                    <div className="space-y-1 min-w-0 flex-1">
+                                <div key={item.id} className="p-4 hover:bg-muted/30 transition-all duration-200 group flex items-start justify-between gap-4">
+                                    <div className="space-y-1.5 min-w-0 flex-1">
                                         <div className="flex items-center gap-2">
-                                            <h4 className="font-semibold truncate cursor-pointer hover:underline" onClick={() => handleCopy(item.value)}>{item.label}</h4>
-                                            <span className="text-xs text-muted-foreground border px-1 rounded bg-background">{new Date(item.createdAt).toLocaleDateString()}</span>
+                                            <h4 className="font-bold text-foreground/90 truncate cursor-pointer hover:text-primary transition-colors" onClick={() => handleCopy(item.id, item.value)}>
+                                                {item.label}
+                                            </h4>
+                                            <Badge variant="outline" className="text-[10px] h-4 font-inter">{new Date(item.createdAt).toLocaleDateString()}</Badge>
                                         </div>
-                                        {item.username && <p className="text-sm text-muted-foreground truncate cursor-pointer hover:text-primary transition-colors" onClick={() => handleCopy(item.username!)}>{item.username}</p>}
+                                        {item.username && (
+                                            <p className="text-xs text-muted-foreground font-inter truncate hover:underline cursor-pointer" onClick={() => handleCopy(item.id, item.username!, true)}>
+                                                {item.username}
+                                            </p>
+                                        )}
                                         
                                         <div className="flex items-center gap-2 mt-2">
-                                            <code className="text-xs bg-muted px-2 py-1 rounded font-mono select-all break-all cursor-pointer hover:bg-muted/80 transition-colors" onClick={() => handleCopy(item.value)}>
-                                                {visibleItems.has(item.id) ? item.value : '••••••••••••••••'}
+                                            <code 
+                                                className="text-xs bg-muted/50 px-3 py-1.5 rounded-md font-mono select-all break-all cursor-pointer hover:bg-muted transition-colors border border-border/50"
+                                                onClick={() => handleCopy(item.id, item.value)}
+                                            >
+                                                {renderedValue}
                                             </code>
                                         </div>
                                     </div>
                                     
-                                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                                        <Button variant="ghost" size="icon" onClick={() => toggleVisibility(item.id)} aria-label={visibleItems.has(item.id) ? "Hide password" : "Show password"}>
-                                            {visibleItems.has(item.id) ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Button variant="ghost" size="icon" onClick={() => toggleVisibility(item.id, item.value)}>
+                                            {isVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                         </Button>
-                                        <Button variant="ghost" size="icon" onClick={() => startEdit(item)} aria-label="Edit item">
+                                        <Button variant="ghost" size="icon" onClick={() => startEdit(item)}>
                                             <Edit2 className="w-4 h-4" />
                                         </Button>
-                                        <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => removeItem(item.id)} aria-label="Delete item">
+                                        <Button variant="ghost" size="icon" className="text-destructive hover:bg-destructive/10" onClick={() => removeItem(item.id)}>
                                             <Trash2 className="w-4 h-4" />
                                         </Button>
                                     </div>
@@ -323,7 +333,7 @@ function calculateStrength(pass: string) {
       if (/[0-9]/.test(pass)) score++;
       if (/[^A-Za-z0-9]/.test(pass)) score++;
       
-      if (score < 3) return { level: 'Weak' as const, color: 'text-red-500', bg: 'bg-red-500' };
-      if (score < 5) return { level: 'Medium' as const, color: 'text-yellow-500', bg: 'bg-yellow-500' };
-      return { level: 'Strong' as const, color: 'text-green-500', bg: 'bg-green-500' };
+      if (score < 3) return { level: 'Weak' as const, color: 'text-rose-500', bg: 'bg-rose-500' };
+      if (score < 5) return { level: 'Medium' as const, color: 'text-amber-500', bg: 'bg-amber-500' };
+      return { level: 'Strong' as const, color: 'text-emerald-500', bg: 'bg-emerald-500' };
 }
